@@ -1065,19 +1065,22 @@ function htmlNotebookParts(text) {
     c.querySelectorAll("table").forEach(t => t.replaceWith(doc.createTextNode("\n" + [...t.rows].map(r => [...r.cells].map(x => x.textContent.trim()).join("  ")).join("\n") + "\n")));
     return c.textContent; };
   const errOf = t => { const m = /Traceback \(most recent call last\)/.test(t) && t.match(/^\s*(\w+(?:Error|Exception))\s*:?\s*(.*)$/m); return m ? "ERROR " + m[1] + ": " + m[2].trim() : null; };
+  const title = (doc.title || "").trim();
+  if (/walkthrough/i.test(title) || doc.getElementById("drop-nb")) throw new Error(`This is the walkthrough page itself (${title || "DBSCAN Walkthrough"}), not the notebook. Load DBSCAN_unpacked.ipynb, or the HTML that Jupyter exports from it (File → Save and Export Notebook As → HTML).`);
   let ins = [...doc.querySelectorAll(".jp-InputArea-editor, div.input_area")].map(n => n.textContent);
   let outs = [];
   doc.querySelectorAll(".jp-OutputArea-output, div.output_subarea").forEach(o => { const t = flatten(o); if (!t.trim()) return; outs.push(t); const e = errOf(t); if (e) outs.push(e); });
-  if (!ins.length && !outs.length) { // not a recognised Jupyter template: read the whole page
+  const jupyter = ins.length > 0 || outs.length > 0;
+  if (!jupyter) { // not a recognised Jupyter template: read the whole page
     ins = [doc.body ? doc.body.textContent : ""];
     outs = [...doc.querySelectorAll("pre, table")].filter(n => !n.parentElement.closest("pre, table")).map(flatten).filter(t => t.trim());
   }
-  return { src: ins.join("\n"), outs };
+  return { src: ins.join("\n"), outs, jupyter, title };
 }
 function parseNotebook(text, name) {
-  let src, outs;
+  let src, outs, H = null;
   if (isHtmlFile(name, text)) {
-    ({ src, outs } = htmlNotebookParts(text));
+    H = htmlNotebookParts(text); ({ src, outs } = H);
   } else {
     let nb; try { nb = JSON.parse(text); } catch { throw new Error("This file is not valid JSON or HTML, so it is not a notebook."); }
     if (!Array.isArray(nb.cells)) throw new Error("No cells found. Choose the .ipynb file saved from Jupyter, or its HTML export.");
@@ -1095,7 +1098,9 @@ function parseNotebook(text, name) {
     const [dk, nbv] = row(lab); if (dk != null) { v["deck_" + k] = dk; if (nbv != null) v[k] = nbv; } });
   m = all.match(/scikit-learn finds[^\n]*/); if (m) v.sk = m[0];
   const errs = outs.filter(o => o.startsWith("ERROR")); if (errs.length) v.errors = errs;
-  if (Object.keys(v).length < 2) throw new Error("Could not find the notebook's results in its outputs. Run all cells, save, and load it again.");
+  if (Object.keys(v).length < 2) throw new Error(H && !H.jupyter
+    ? `This HTML file${H.title ? ` ("${H.title}")` : ""} is not a Jupyter export of the notebook. Load DBSCAN_unpacked.ipynb, or the HTML that Jupyter exports from it.`
+    : "Could not find the notebook's results in its outputs. Run all cells, save, and load it again.");
   return v;
 }
 function validateAssumptions(A) {
