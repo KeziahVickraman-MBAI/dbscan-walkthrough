@@ -431,16 +431,16 @@ footer{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-si
   <div class="chhead">
     <span class="chno">CHAPTER 3</span>
     <h2>Load the files, get the slide's dashboard</h2>
-    <p>Drop in the team's <span class="mono">assumptions.json</span> to rebuild everything from it, and the executed <span class="mono">DBSCAN_unpacked.ipynb</span> to check its saved results against this page. Both start from the copies bundled on 18 Nov 2026. The map geometry (outlets and coastline) is bundled from <span class="mono">sim/sg_geo.json</span>.</p>
+    <p>Drop in the team's <span class="mono">assumptions.json</span> to rebuild everything from it, and the executed <span class="mono">DBSCAN_unpacked.ipynb</span> (or the HTML file Jupyter exports from it) to check its saved results against this page. Both start from the copies bundled on 18 Nov 2026. The map geometry (outlets and coastline) is bundled from <span class="mono">sim/sg_geo.json</span>.</p>
   </div>
   <div class="importrow">
     <button class="btn primary" id="imp-btn">⇪ Import files</button>
-    <span class="note">Choose <span class="mono">assumptions.json</span>, <span class="mono">DBSCAN_unpacked.ipynb</span>, or both at once. You can also drop them on the boxes below.</span>
-    <input type="file" id="f-any" accept=".json,.ipynb,application/json" multiple hidden>
+    <span class="note">Choose <span class="mono">assumptions.json</span>, <span class="mono">DBSCAN_unpacked.ipynb</span> (or its <span class="mono">.html</span> export), or both at once. You can also drop them on the boxes below.</span>
+    <input type="file" id="f-any" accept=".json,.ipynb,.html,.htm,application/json,text/html" multiple hidden>
   </div>
   <div class="drops">
-    <label class="drop" id="drop-json"><input type="file" id="f-json" accept=".json,application/json"><span class="dt">assumptions.json</span><span class="ds ok" id="s-json">Using the bundled copy</span><span class="btn pick">Choose file…</span><button class="reset" id="r-json" hidden>Use the bundled copy</button></label>
-    <label class="drop" id="drop-nb"><input type="file" id="f-nb" accept=".ipynb,application/json"><span class="dt">DBSCAN_unpacked.ipynb</span><span class="ds" id="s-nb">Not loaded. Import the executed notebook to compare.</span><span class="btn pick">Choose file…</span><button class="reset" id="r-nb" hidden>Remove</button></label>
+    <label class="drop" id="drop-json"><input type="file" id="f-json" accept=".json,application/json" title=""><span class="dt">assumptions.json</span><span class="ds ok" id="s-json">Using the bundled copy</span><span class="btn pick">Choose file…</span><button class="reset" id="r-json" hidden>Use the bundled copy</button></label>
+    <label class="drop" id="drop-nb"><input type="file" id="f-nb" accept=".ipynb,.html,.htm,application/json,text/html" title=""><span class="dt">DBSCAN_unpacked.ipynb</span><span class="ds" id="s-nb">Not loaded. Import the executed notebook (.ipynb or its HTML export) to compare.</span><span class="btn pick">Choose file…</span><button class="reset" id="r-nb" hidden>Remove</button></label>
   </div>
 
   <div id="dash">
@@ -1055,14 +1055,38 @@ function renderRecon() {
     (NB.vals && NB.vals.sk ? `<tr><td>scikit-learn cross-check</td><td class="n">–</td><td class="n" style="white-space:normal;font-size:12px">${esc(NB.vals.sk)}</td><td class="n">–</td><td>${/True/.test(NB.vals.sk) ? '<span style="color:var(--good)">✓ same noise points</span>' : ""}</td></tr>` : "") +
     (ST.N !== ST.RAW.sitepick.events.value ? `<tr><td colspan="5" style="color:var(--red);white-space:normal">Chapter 1 is set to ${fmt(ST.N)} users; the notebook uses the file's ${fmt(ST.RAW.sitepick.events.value)}. Set it back to compare like with like.</td></tr>` : "");
 }
-function parseNotebook(text) {
-  let nb; try { nb = JSON.parse(text); } catch { throw new Error("This file is not valid JSON, so it is not a notebook."); }
-  if (!Array.isArray(nb.cells)) throw new Error("No cells found. Choose the .ipynb file saved from Jupyter.");
-  const src = nb.cells.map(c => [].concat(c.source || []).join("")).join("\n");
-  const outs = []; nb.cells.forEach(c => (c.outputs || []).forEach(o => { if (o.text) outs.push([].concat(o.text).join("")); const tp = o.data && o.data["text/plain"]; if (tp) outs.push([].concat(tp).join("")); if (o.output_type === "error") outs.push("ERROR " + o.ename + ": " + o.evalue); }));
+const isHtmlFile = (name, text) => /\.html?$/i.test(name || "") || /^\s*</.test(text);
+// an HTML export of the notebook (nbconvert / "Save and Export as HTML", lab or classic template)
+function htmlNotebookParts(text) {
+  const doc = new DOMParser().parseFromString(text, "text/html");
+  doc.querySelectorAll("script,style,noscript").forEach(n => n.remove());
+  const flatten = node => { const c = node.cloneNode(true);
+    // DataFrames are exported as tables; turn each back into "0  label  a  b" lines like the .ipynb text/plain output
+    c.querySelectorAll("table").forEach(t => t.replaceWith(doc.createTextNode("\n" + [...t.rows].map(r => [...r.cells].map(x => x.textContent.trim()).join("  ")).join("\n") + "\n")));
+    return c.textContent; };
+  const errOf = t => { const m = /Traceback \(most recent call last\)/.test(t) && t.match(/^\s*(\w+(?:Error|Exception))\s*:?\s*(.*)$/m); return m ? "ERROR " + m[1] + ": " + m[2].trim() : null; };
+  let ins = [...doc.querySelectorAll(".jp-InputArea-editor, div.input_area")].map(n => n.textContent);
+  let outs = [];
+  doc.querySelectorAll(".jp-OutputArea-output, div.output_subarea").forEach(o => { const t = flatten(o); if (!t.trim()) return; outs.push(t); const e = errOf(t); if (e) outs.push(e); });
+  if (!ins.length && !outs.length) { // not a recognised Jupyter template: read the whole page
+    ins = [doc.body ? doc.body.textContent : ""];
+    outs = [...doc.querySelectorAll("pre, table")].filter(n => !n.parentElement.closest("pre, table")).map(flatten).filter(t => t.trim());
+  }
+  return { src: ins.join("\n"), outs };
+}
+function parseNotebook(text, name) {
+  let src, outs;
+  if (isHtmlFile(name, text)) {
+    ({ src, outs } = htmlNotebookParts(text));
+  } else {
+    let nb; try { nb = JSON.parse(text); } catch { throw new Error("This file is not valid JSON or HTML, so it is not a notebook."); }
+    if (!Array.isArray(nb.cells)) throw new Error("No cells found. Choose the .ipynb file saved from Jupyter, or its HTML export.");
+    src = nb.cells.map(c => [].concat(c.source || []).join("")).join("\n");
+    outs = []; nb.cells.forEach(c => (c.outputs || []).forEach(o => { if (o.text) outs.push([].concat(o.text).join("")); const tp = o.data && o.data["text/plain"]; if (tp) outs.push([].concat(tp).join("")); if (o.output_type === "error") outs.push("ERROR " + o.ename + ": " + o.evalue); }));
+  }
   const all = outs.join("\n");
   if (!/DBSCAN/i.test(src)) throw new Error("This notebook does not mention DBSCAN. Load DBSCAN_unpacked.ipynb.");
-  if (!outs.length) throw new Error("The notebook has no saved outputs. Run all cells in Jupyter, save, then load it again.");
+  if (!outs.length) throw new Error("The notebook has no saved outputs. Run all cells in Jupyter, save (or re-export to HTML), then load it again.");
   const v = {}, num = x => (x == null ? null : +x);
   let m = all.match(/(\d+) clusters\s*\|\s*(\d+) of (\d+) unmet dots are noise/); if (m) v.clusters = +m[1];
   m = all.match(/each dot = ([\d.]+) cups\/day\s*\|\s*unmet share = ([\d.]+)%/); if (m) { v.scale = +m[1]; v.unmet = +m[2] / 100; }
@@ -1102,13 +1126,13 @@ $("#r-json").onclick = e => { e.preventDefault(); ST.RAW = RAW0; ST.rawName = nu
   $("#s-json").className = "ds ok"; $("#s-json").textContent = "Using the bundled copy"; $("#r-json").hidden = true; };
 const loadNb = async file => {
   const s = $("#s-nb");
-  try { NB.vals = parseNotebook(await readFile(file)); NB.name = file.name; const n = Object.keys(NB.vals).length;
+  try { NB.vals = parseNotebook(await readFile(file), file.name); NB.name = file.name; const n = Object.keys(NB.vals).length;
     s.className = "ds ok"; s.textContent = `Loaded ${file.name}: read ${n} saved results${NB.vals.errors ? `; ${NB.vals.errors.length} cell(s) ended in an error` : ""}. See the check below the dashboard.`;
     $("#r-nb").hidden = false; renderRecon(); toast("Notebook loaded"); }
   catch (err) { s.className = "ds err"; s.textContent = err.message; }
 };
 wireDrop($("#drop-nb"), $("#f-nb"), loadNb);
-$("#r-nb").onclick = e => { e.preventDefault(); NB.vals = null; NB.name = null; $("#s-nb").className = "ds"; $("#s-nb").textContent = "Not loaded. Import the executed notebook to compare."; $("#r-nb").hidden = true; renderRecon(); };
+$("#r-nb").onclick = e => { e.preventDefault(); NB.vals = null; NB.name = null; $("#s-nb").className = "ds"; $("#s-nb").textContent = "Not loaded. Import the executed notebook (.ipynb or its HTML export) to compare."; $("#r-nb").hidden = true; renderRecon(); };
 onRun(() => { if (!D.par) D.par = defPar(); dashRebuild(false); renderRecon(); });
 
 // expand
@@ -1172,8 +1196,8 @@ document.addEventListener("click", e => { if (!e.target.closest(".dtools")) { $(
 // one Import button for either or both files
 async function importFiles(files) {
   for (const f of files) {
-    if (/\.ipynb$/i.test(f.name)) { await loadNb(f); continue; }
-    if (!/\.json$/i.test(f.name)) { toast(f.name + ": choose a .json or .ipynb file"); continue; }
+    if (/\.(ipynb|html?)$/i.test(f.name)) { await loadNb(f); continue; }
+    if (!/\.json$/i.test(f.name)) { toast(f.name + ": choose a .json, .ipynb or .html file"); continue; }
     let isNb = false; try { isNb = Array.isArray(JSON.parse(await f.text()).cells); } catch {}
     await (isNb ? loadNb(f) : loadJson(f));
   }
